@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+
+# Runtime exports and generated workbooks
+outputs/generated/*
+outputs/scraped/*
+outputs/legacy/*
+
+# Keep output folders if placeholder files are added later.
+!outputs/generated/.gitkeep
+!outputs/scraped/.gitkeep
+!outputs/legacy/.gitkeep
