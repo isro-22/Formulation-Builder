@@ -434,14 +434,14 @@ def parse_excel_input(uploaded_file) -> Tuple[Dict[str, Any], List[Dict[str, Any
 
     return data, materials, warnings
 
-st.set_page_config(page_title="Formulation Workspace", layout="wide")
+st.set_page_config(page_title="Formulation Builder", layout="wide")
 
 st.markdown(
     """
     <style>
     .workspace-header {
         margin: -1.25rem 0 1.15rem 0;
-        padding: 1.1rem 1.35rem;
+        padding: 1.25rem 1.45rem;
         border-radius: 8px;
         background: linear-gradient(135deg, #0f4c5c 0%, #1f7a8c 58%, #2a9d8f 100%);
         color: #ffffff;
@@ -450,7 +450,7 @@ st.markdown(
     }
     .workspace-header h1 {
         margin: 0;
-        font-size: 1.55rem;
+        font-size: 1.72rem;
         line-height: 1.15;
         font-weight: 760;
         letter-spacing: 0;
@@ -460,17 +460,56 @@ st.markdown(
         font-size: 0.92rem;
         opacity: 0.9;
     }
+    div[data-testid="stRadio"] {
+        margin: 0 0 1.1rem 0;
+        padding: 0.85rem 1rem 1rem 1rem;
+        border: 1px solid #d8e6e8;
+        border-radius: 8px;
+        background: linear-gradient(180deg, #f8fbfb 0%, #eef6f7 100%);
+    }
+    div[data-testid="stRadio"] > label {
+        color: #27333a;
+        font-weight: 760;
+        font-size: 0.98rem;
+        padding-bottom: 0.35rem;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] {
+        gap: 0.65rem;
+        flex-wrap: wrap;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] label {
+        min-width: 260px;
+        padding: 0.72rem 0.9rem;
+        border: 1px solid #d5dee2;
+        border-radius: 8px;
+        background: #ffffff;
+        box-shadow: 0 4px 14px rgba(15, 76, 92, 0.06);
+        transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] label:hover {
+        border-color: #1f7a8c;
+        box-shadow: 0 8px 20px rgba(15, 76, 92, 0.12);
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) {
+        border-color: #1f7a8c;
+        background: #e8f6f5;
+        box-shadow: inset 0 0 0 1px #1f7a8c, 0 8px 20px rgba(15, 76, 92, 0.14);
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) p {
+        color: #0f4c5c;
+        font-weight: 760;
+    }
     </style>
     <div class="workspace-header">
-        <h1>Formulation Workspace</h1>
-        <p>Generate formulation sheets and extract legacy formulation data from one control center.</p>
+        <h1>Formulation Builder</h1>
+        <p>A streamlined formulation sheet generation system that automates data processing, calculation, and structured document creation.</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
 workspace_mode = st.radio(
-    "Workspace",
+    "Select Page",
     options=["Formulation Sheet Generator", "Data Extraction Engine"],
     index=0,
     horizontal=True,
