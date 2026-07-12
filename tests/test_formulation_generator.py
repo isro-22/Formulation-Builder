@@ -263,11 +263,56 @@ class TestFormulationGenerator(unittest.TestCase):
         workbook = openpyxl.load_workbook(io.BytesIO(export_formulation_model_xlsx(formulation)))
 
         self.assertEqual(workbook.sheetnames, ["product", "phase_metadata", "materials"])
-        self.assertEqual(workbook["product"]["A1"].value, "product_name")
-        self.assertEqual(workbook["product"]["B1"].value, "formula_code")
-        self.assertEqual(workbook["product"]["H1"].value, "approval_date")
-        self.assertEqual(workbook["product"]["H2"].value, "2026-07-09")
-        self.assertEqual(workbook["materials"]["A2"].value, "Casing Rajangan")
+        self.assertEqual(workbook["product"]["A1"].value, "product_id")
+        self.assertEqual(workbook["product"]["B1"].value, "product_name")
+        self.assertEqual(workbook["product"]["C1"].value, "formula_code")
+        self.assertEqual(workbook["product"]["A2"].value, "CS-K-CK-LCDT-04-R00")
+        self.assertEqual(workbook["product"]["I1"].value, "approval_date")
+        self.assertEqual(workbook["product"]["I2"].value, "2026-07-09")
+        self.assertEqual(workbook["phase_metadata"]["A1"].value, "phase_id")
+        self.assertEqual(workbook["phase_metadata"]["B1"].value, "product_id")
+        self.assertEqual(workbook["phase_metadata"]["A2"].value, "CS-K-CK-LCDT-04-R00::CASING-RAJANGAN")
+        self.assertEqual(workbook["materials"]["A1"].value, "material_id")
+        self.assertEqual(workbook["materials"]["B1"].value, "product_id")
+        self.assertEqual(workbook["materials"]["C1"].value, "phase_id")
+        self.assertEqual(workbook["materials"]["D2"].value, "Casing Rajangan")
+
+    def test_generated_input_sheet_contains_process_columns(self):
+        material_rows = deepcopy(self.material_rows)
+        material_rows[0].update({
+            "temperature": "45",
+            "agitation_rate": "500 RPM",
+            "mixing_duration": "15 min",
+            "work_instruction_override": "Start mixing base materials.",
+            "process_role": "Carrier/Base",
+            "notes": "Lab note",
+        })
+        formulation = self.build_formulation(material_rows=material_rows)
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "input_process_columns.xlsx"
+            generate_formulation_workbook(formulation, self.template_path, output_path)
+            workbook = openpyxl.load_workbook(output_path, data_only=False)
+            input_sheet = workbook["INPUT"]
+
+            expected_headers = {
+                "G19": "Addition Sequence",
+                "H19": "Temperature",
+                "I19": "Agitation Rate",
+                "J19": "Mixing Duration",
+                "K19": "Work Instruction Override",
+                "L19": "Process Role",
+                "M19": "Notes",
+            }
+            for cell_ref, expected_header in expected_headers.items():
+                self.assertEqual(input_sheet[cell_ref].value, expected_header)
+
+            self.assertEqual(input_sheet["G20"].value, 1)
+            self.assertEqual(input_sheet["H20"].value, "45 °C")
+            self.assertEqual(input_sheet["I20"].value, "500 RPM")
+            self.assertEqual(input_sheet["J20"].value, "15 min")
+            self.assertEqual(input_sheet["K20"].value, "Start mixing base materials.")
+            self.assertEqual(input_sheet["L20"].value, "Carrier/Base")
+            self.assertEqual(input_sheet["M20"].value, "Lab note")
 
     def test_generated_workbook_contains_metadata(self):
         formulation = self.build_formulation()

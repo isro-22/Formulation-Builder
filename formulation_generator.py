@@ -2461,8 +2461,24 @@ def _serialize_model_value(value: Any) -> Any:
     return value
 
 
+def normalize_identifier(value: Any) -> str:
+    text = str(value or "").strip()
+    normalized = re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-").upper()
+    return normalized or "UNSPECIFIED"
+
+
+def product_id_for(formulation: FormulationInput) -> str:
+    return normalize_identifier(formulation.formula_code or formulation.product_name)
+
+
+def phase_id_for(product_id: str, phase: Any) -> str:
+    return f"{product_id}::{normalize_identifier(phase)}"
+
+
 def export_formulation_model(formulation: FormulationInput) -> Dict[str, Any]:
+    product_id = product_id_for(formulation)
     product = {
+        "product_id": product_id,
         "product_name": formulation.product_name,
         "formula_code": formulation.formula_code,
         "product_weight_mg_stick": formulation.product_weight_mg_stick,
@@ -2495,6 +2511,8 @@ def export_formulation_model(formulation: FormulationInput) -> Dict[str, Any]:
 
     phase_metadata = [
         {
+            "phase_id": phase_id_for(product_id, metadata.phase),
+            "product_id": product_id,
             "phase": metadata.phase,
             "nav_code": metadata.nav_code,
             "description": metadata.description,
@@ -2504,8 +2522,21 @@ def export_formulation_model(formulation: FormulationInput) -> Dict[str, Any]:
         for metadata in sorted(formulation.phase_metadata.values(), key=lambda item: phase_sort_key(item.phase))
     ]
 
-    materials = [
-        {
+    materials = []
+    sorted_materials = sorted(
+        formulation.materials,
+        key=lambda item: (
+            phase_sort_key(item.phase),
+            item.addition_sequence if item.addition_sequence is not None else 999999,
+            item.item_code or "",
+        ),
+    )
+    for material_index, material in enumerate(sorted_materials, start=1):
+        phase_id = phase_id_for(product_id, material.phase)
+        materials.append({
+            "material_id": f"{phase_id}::{material_index:04d}",
+            "product_id": product_id,
+            "phase_id": phase_id,
             "phase": material.phase,
             "item_code": material.item_code,
             "item_name": material.item_name,
@@ -2519,16 +2550,7 @@ def export_formulation_model(formulation: FormulationInput) -> Dict[str, Any]:
             "work_instruction_override": material.work_instruction_override,
             "process_role": material.process_role,
             "notes": material.notes,
-        }
-        for material in sorted(
-            formulation.materials,
-            key=lambda item: (
-                phase_sort_key(item.phase),
-                item.addition_sequence if item.addition_sequence is not None else 999999,
-                item.item_code or "",
-            ),
-        )
-    ]
+        })
 
     return {
         "schema_version": "1.0",

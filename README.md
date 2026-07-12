@@ -140,6 +140,25 @@ Material lookup dan harga chemical dibaca dari file:
 
 File ini dipakai generator sebagai database reference untuk material master.
 
+## Relasi Database
+
+Export model JSON/XLSX memakai tiga tabel utama:
+
+- `product`
+- `phase_metadata`
+- `materials`
+
+Relasi antar sheet dibuat lewat key berikut:
+
+- `product.product_id` menjadi primary key product.
+- `phase_metadata.product_id` mengarah ke `product.product_id`.
+- `phase_metadata.phase_id` menjadi primary key phase.
+- `materials.product_id` mengarah ke `product.product_id`.
+- `materials.phase_id` mengarah ke `phase_metadata.phase_id`.
+- `materials.material_id` menjadi primary key material row.
+
+Dengan struktur ini, database berisi 50 product cukup dibuat dengan menggabungkan semua row `product`, `phase_metadata`, dan `materials` dari masing-masing model. Saat ingin memanggil satu product tertentu, filter dulu `product.product_id`, lalu ambil semua phase dan material dengan `product_id` yang sama.
+
 ## Testing
 
 Jalankan test engine dengan:
