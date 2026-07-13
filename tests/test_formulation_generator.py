@@ -13,13 +13,16 @@ from formulation_generator import (
     DEFAULT_APPROVED_BY,
     DEFAULT_APPROVED_POSITION,
     DEFAULT_EFFECTIVE_DATE,
+    DEFAULT_DATE_NUMBER_FORMAT,
     DEFAULT_PREPARED_BY_NAME,
     DEFAULT_PREPARED_POSITION,
     DEFAULT_REVIEWED_BY,
     DEFAULT_REVIEWED_POSITION,
     FORMULA_ROW_HEIGHT_POINTS,
+    FORMULA_SECTION_FILL_COLOR,
     FORMULA_MATERIAL_COLUMNS,
     INPUT_SOURCE_FONT_COLOR,
+    MATERIAL_LOOKUP_SOURCE_ONLINE,
     MATERIAL_DB_PATH,
     PARENT_BOM_LEVEL1_FILL_COLOR,
     PHASE_PERCENT_FORMAT,
@@ -184,6 +187,8 @@ class TestFormulationGenerator(unittest.TestCase):
             workbook = openpyxl.load_workbook(result_path)
             self.assertIn("INPUT", workbook.sheetnames)
             self.assertIn("Formula", workbook.sheetnames)
+            self.assertEqual(workbook["INPUT"].sheet_state, "hidden")
+            self.assertEqual(workbook["BOL-SAAT List"].sheet_state, "hidden")
             self.assertEqual(workbook["Formula"].row_dimensions[1].height, 20.0)
             self.assertEqual(workbook["Formula"].row_dimensions[2].height, 20.0)
             self.assertEqual(workbook["Formula"].row_dimensions[3].height, 20.0)
@@ -351,7 +356,8 @@ class TestFormulationGenerator(unittest.TestCase):
         workbook = self.generate_workbook(form_data=form_data)
         formula_sheet = workbook["Formula"]
 
-        self.assertEqual(formula_sheet.cell(row=3, column=17).value, DEFAULT_EFFECTIVE_DATE.isoformat())
+        self.assertEqual(formula_sheet.cell(row=3, column=17).value, DEFAULT_EFFECTIVE_DATE)
+        self.assertEqual(formula_sheet.cell(row=3, column=17).number_format, DEFAULT_DATE_NUMBER_FORMAT)
 
     def test_casing_top_flavor_summary_uses_phase_description_totals_and_usd_price(self):
         workbook = self.generate_workbook()
@@ -393,6 +399,9 @@ class TestFormulationGenerator(unittest.TestCase):
         self.assertEqual(formula_sheet.cell(row=approval_row, column=1).value, "Prepared By")
         self.assertEqual(formula_sheet.cell(row=approval_row, column=6).value, "Reviewed By")
         self.assertEqual(formula_sheet.cell(row=approval_row, column=13).value, "Approved By")
+        self.assertTrue(fill_rgb(formula_sheet.cell(row=approval_row, column=1)).endswith(FORMULA_SECTION_FILL_COLOR))
+        self.assertTrue(fill_rgb(formula_sheet.cell(row=approval_row, column=6)).endswith(FORMULA_SECTION_FILL_COLOR))
+        self.assertTrue(fill_rgb(formula_sheet.cell(row=approval_row, column=13)).endswith(FORMULA_SECTION_FILL_COLOR))
         merged_ranges = {str(cell_range) for cell_range in formula_sheet.merged_cells.ranges}
         self.assertIn(f"A{approval_row}:E{approval_row}", merged_ranges)
         self.assertIn(f"F{approval_row}:L{approval_row}", merged_ranges)
@@ -427,6 +436,8 @@ class TestFormulationGenerator(unittest.TestCase):
         self.assertIsNone(input_sheet.cell(row=4, column=5).value)
         self.assertEqual(input_sheet.cell(row=3, column=2).value, build_input_formula_code_formula())
         self.assertEqual(input_sheet.cell(row=6, column=11).value, build_input_formulation_code_formula())
+        self.assertEqual(input_sheet.cell(row=8, column=2).value, DEFAULT_EFFECTIVE_DATE)
+        self.assertEqual(input_sheet.cell(row=8, column=2).number_format, DEFAULT_DATE_NUMBER_FORMAT)
         self.assertEqual(input_sheet.cell(row=10, column=10).value, "APPROVAL METADATA")
         self.assertEqual(input_sheet.cell(row=7, column=1).value, "Lab Personnel Involved")
         self.assertEqual(input_sheet.cell(row=11, column=11).value, DEFAULT_PREPARED_BY_NAME)
@@ -568,6 +579,51 @@ class TestFormulationGenerator(unittest.TestCase):
                 font_rgb(formula_sheet.cell(row=row, column=FORMULA_MATERIAL_COLUMNS["ratio"])),
                 "00000000",
             )
+
+    def test_online_material_lookup_writes_sharepoint_xlookup_formulas(self):
+        form_data = deepcopy(self.form_data)
+        form_data["material_lookup_source"] = MATERIAL_LOOKUP_SOURCE_ONLINE
+        formulation = self.build_formulation(form_data=form_data)
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "formulation_online_lookup.xlsx"
+            generate_formulation_workbook(formulation, self.template_path, output_path)
+            workbook = openpyxl.load_workbook(output_path, data_only=False)
+
+        formula_sheet = workbook["Formula"]
+        row = SECTION_ROW_RANGES["Casing Rajangan"][0]
+        expected_source = (
+            "'https://ysqint.sharepoint.com/sites/bollablib/Shared Documents/05 Lab Management/"
+            "01 Stock & Inventory/01 Chemical Inventory/[BOL Lab Chemical Master List.xlsx]"
+            "BOL Lab Chemical Masterlist New'"
+        )
+        self.assertEqual(
+            formula_sheet.cell(row=row, column=FORMULA_MATERIAL_COLUMNS["physical_form"]).value,
+            f'=IFNA(_xlfn.XLOOKUP(B{row},{expected_source}!$L:$L,{expected_source}!$W:$W),"")',
+        )
+        self.assertEqual(
+            formula_sheet.cell(row=row, column=FORMULA_MATERIAL_COLUMNS["cas_number"]).value,
+            f'=IFNA(_xlfn.XLOOKUP(B{row},{expected_source}!$L:$L,{expected_source}!$J:$J),"")',
+        )
+        self.assertEqual(
+            formula_sheet.cell(row=row, column=FORMULA_MATERIAL_COLUMNS["material_price"]).value,
+            f"=IFNA(_xlfn.XLOOKUP(B{row},{expected_source}!$L:$L,{expected_source}!$K:$K),0)",
+        )
+        for phase in ("Casing Rajangan", "Casing Krosok", "Top Flavor"):
+            for material_row in SECTION_ROW_RANGES[phase]:
+                if formula_sheet.cell(row=material_row, column=FORMULA_MATERIAL_COLUMNS["item_code"]).value is None:
+                    continue
+                self.assertIn(
+                    f"_xlfn.XLOOKUP(B{material_row},",
+                    formula_sheet.cell(row=material_row, column=FORMULA_MATERIAL_COLUMNS["physical_form"]).value,
+                )
+                self.assertIn(
+                    f"_xlfn.XLOOKUP(B{material_row},",
+                    formula_sheet.cell(row=material_row, column=FORMULA_MATERIAL_COLUMNS["cas_number"]).value,
+                )
+                self.assertIn(
+                    f"_xlfn.XLOOKUP(B{material_row},",
+                    formula_sheet.cell(row=material_row, column=FORMULA_MATERIAL_COLUMNS["material_price"]).value,
+                )
 
     def test_percent_mode_converts_to_dosage_mg_stick_with_five_decimals(self):
         form_data = deepcopy(self.form_data)

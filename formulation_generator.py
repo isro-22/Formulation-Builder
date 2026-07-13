@@ -26,11 +26,23 @@ LOGO_PATH = PROJECT_ROOT / "assets" / "logo.png"
 MATERIAL_DB_PATH = PROJECT_ROOT / "references" / "BOL-SAAT List.xlsx"
 LOGO_MERGED_RANGE = "A1:B3"
 EMPTY_SECTION_ROW_COUNT = 3
-DEFAULT_EFFECTIVE_DATE = date_class(2025, 10, 10)
+DEFAULT_EFFECTIVE_DATE = date_class(2025, 10, 8)
+DEFAULT_DATE_NUMBER_FORMAT = "dd-mmm-yyyy"
 FORMULA_ROW_HEIGHT_PX = 15
 FORMULA_ROW_HEIGHT_POINTS = 15.0
 INPUT_SOURCE_FONT_COLOR = "7030A0"
 PARENT_BOM_LEVEL1_FILL_COLOR = "E6D9F2"
+FORMULA_SECTION_FILL_COLOR = "CAEDFB"
+FORMULA_PREMIX_FILL_COLOR = "FCE4D6"
+FORMULA_GENERAL_FILL_COLOR = "F2F2F2"
+WORKBOOK_AUTHOR = "HambaAllah"
+MATERIAL_LOOKUP_SOURCE_LOCAL = "local"
+MATERIAL_LOOKUP_SOURCE_ONLINE = "online"
+ONLINE_CHEMICAL_MASTER_REF = (
+    "'https://ysqint.sharepoint.com/sites/bollablib/Shared Documents/05 Lab Management/"
+    "01 Stock & Inventory/01 Chemical Inventory/[BOL Lab Chemical Master List.xlsx]"
+    "BOL Lab Chemical Masterlist New'"
+)
 PHASE_PERCENT_FORMAT = "0.00%"
 USD_ACCOUNTING_FORMAT = '_([$$-409]* #,##0.00_);_([$$-409]* \\(#,##0.00\\);_([$$-409]* "-"??_);_(@_)'
 DEFAULT_PREPARED_POSITION = "Flavourist"
@@ -290,6 +302,7 @@ class FormulationInput:
     phase_metadata: Dict[str, PhaseMetadata] = field(default_factory=dict)
     materials: List[MaterialInput] = field(default_factory=list)
     bypass_material_lookup: bool = False
+    material_lookup_source: str = MATERIAL_LOOKUP_SOURCE_LOCAL
 
     @property
     def effective_date(self) -> Any:
@@ -298,6 +311,10 @@ class FormulationInput:
     @property
     def effective_approval_date(self) -> Any:
         return self.approval_date or self.effective_date
+
+    @property
+    def uses_online_material_lookup(self) -> bool:
+        return str(self.material_lookup_source or MATERIAL_LOOKUP_SOURCE_LOCAL).strip().lower() == MATERIAL_LOOKUP_SOURCE_ONLINE
 
 
 def normalize_phase(phase: str) -> str:
@@ -493,6 +510,21 @@ def percent_mode_dosage_formula(material: MaterialInput, row_index: int) -> Opti
             formula = f"{formula}*{share_formula}"
     return formula
 
+def online_material_lookup_formula(row_index: int, result_column: str, fallback: Any) -> str:
+    return (
+        f"=IFNA(_xlfn.XLOOKUP(B{row_index},{ONLINE_CHEMICAL_MASTER_REF}!$L:$L,"
+        f"{ONLINE_CHEMICAL_MASTER_REF}!${result_column}:${result_column}),{fallback})"
+    )
+
+def online_physical_form_formula(row_index: int) -> str:
+    return online_material_lookup_formula(row_index, "W", '""')
+
+def online_cas_number_formula(row_index: int) -> str:
+    return online_material_lookup_formula(row_index, "J", '""')
+
+def online_material_price_formula(row_index: int) -> str:
+    return online_material_lookup_formula(row_index, "K", "0")
+
 
 def reset_runtime_layout() -> None:
     SECTION_ROW_RANGES.clear()
@@ -588,6 +620,9 @@ def find_material_record(df: pd.DataFrame, item_code: Optional[str], item_name: 
         return record
     return {"item_code": item_code, "item_name": item_name, "price": None, "cas_number": None, "appearance": None}
 
+def empty_material_db() -> pd.DataFrame:
+    return pd.DataFrame(columns=["item_code", "item_name", "price", "cas_number", "appearance"])
+
 
 def validate_formulation_input(formulation: FormulationInput, material_db: pd.DataFrame) -> List[str]:
     errors: List[str] = []
@@ -652,12 +687,12 @@ def validate_formulation_input(formulation: FormulationInput, material_db: pd.Da
         record = lookup_material_record(material_db, material.item_code, material.item_name)
         if record is None:
             lookup_value = material.item_code or material.item_name
-            if not formulation.bypass_material_lookup:
+            if not formulation.bypass_material_lookup and not formulation.uses_online_material_lookup:
                 errors.append(f"{row_label}: material lookup tidak ditemukan untuk '{lookup_value}'.")
             continue
 
         price = material.material_price if material.material_price is not None else record.get("price")
-        if is_missing_number(price) and not formulation.bypass_material_lookup:
+        if is_missing_number(price) and not formulation.bypass_material_lookup and not formulation.uses_online_material_lookup:
             lookup_value = material.item_code or material.item_name
             errors.append(f"{row_label}: price material kosong untuk '{lookup_value}'.")
 
@@ -1075,7 +1110,7 @@ def phase_header_labels(phase: str) -> Dict[str, str]:
             "description": "Casing NAV Item Description",
             "blend": "Blend Ratio",
             "application": "Casing Application (%)",
-            "physical": "Physical\nForm",
+            "physical": "Physical State",
         }
     if normalized == "Top Flavor":
         return {
@@ -1096,9 +1131,10 @@ def phase_header_labels(phase: str) -> Dict[str, str]:
 
 
 def rebuild_formula_section_layout(ws: openpyxl.worksheet.worksheet.Worksheet) -> None:
-    header_fill = PatternFill("solid", fgColor="1F4E78")
-    label_fill = PatternFill("solid", fgColor="D9EAF7")
-    table_fill = PatternFill("solid", fgColor="D9EAD3")
+    main_header_fill = PatternFill("solid", fgColor=FORMULA_SECTION_FILL_COLOR)
+    premix_header_fill = PatternFill("solid", fgColor=FORMULA_PREMIX_FILL_COLOR)
+    label_fill = PatternFill("solid", fgColor=FORMULA_GENERAL_FILL_COLOR)
+    table_fill = PatternFill("solid", fgColor=FORMULA_GENERAL_FILL_COLOR)
     border = Border(
         left=Side(style="thin", color="000000"),
         right=Side(style="thin", color="000000"),
@@ -1148,8 +1184,8 @@ def rebuild_formula_section_layout(ws: openpyxl.worksheet.worksheet.Worksheet) -
         ws.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=17)
         title_cell = normal_cell(title_row, 1)
         title_cell.value = labels["title"]
-        title_cell.font = Font(bold=True, color="FFFFFF")
-        title_cell.fill = header_fill
+        title_cell.font = Font(bold=True, color="000000")
+        title_cell.fill = premix_header_fill if is_premix_phase(phase) else main_header_fill
         title_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
         metadata_rows = [
@@ -1220,6 +1256,19 @@ def format_approval_date(value: Any) -> str:
     return str(value)
 
 
+def coerce_excel_date(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date_class):
+        return value
+    try:
+        parsed = pd.to_datetime(value)
+        if not pd.isna(parsed):
+            return parsed.date()
+    except (TypeError, ValueError):
+        pass
+    return value
+
 def apply_document_header_layout(
     ws: openpyxl.worksheet.worksheet.Worksheet,
     formulation: FormulationInput,
@@ -1230,7 +1279,7 @@ def apply_document_header_layout(
         "P2": "Revision No",
         "Q2": "00",
         "P3": "Effective Date",
-        "Q3": formulation.effective_date,
+        "Q3": coerce_excel_date(formulation.effective_date),
         "A4": "Factory Lab to Fill Up",
         "A5": "Full FG Description",
         "A6": "Mixing Factory",
@@ -1256,9 +1305,97 @@ def apply_document_header_layout(
 
     ws["Q1"].font = Font(bold=True, color="FF0000")
     ws["Q2"].number_format = "@"
+    ws["Q3"].number_format = DEFAULT_DATE_NUMBER_FORMAT
     for cell_ref in ("P1", "P2", "P3", "A4", "A5", "A6", "A7", "A9", "A10", "H10", "A11", "A12", "H12", "A13", "H13", "A14", "H14", "A15", "H15", "A16", "H16"):
         ws[cell_ref].font = copy(ws[cell_ref].font)
         ws[cell_ref].font = Font(bold=True)
+
+def normalized_header_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").replace("\n", " ")).strip()
+
+def set_wrap_text(cell, enabled: bool) -> None:
+    if isinstance(cell, MergedCell):
+        return
+    alignment = copy(cell.alignment) if cell.alignment is not None else Alignment()
+    alignment.wrap_text = enabled
+    cell.alignment = alignment
+
+def set_formula_cell_fill(ws: openpyxl.worksheet.worksheet.Worksheet, cell_ref: str, color: str) -> None:
+    cell = ws[cell_ref]
+    target = writable_cell(ws, cell.row, cell.column)
+    if target is not None:
+        set_fill_color(target, color)
+
+def apply_generated_workbook_formatting(ws: openpyxl.worksheet.worksheet.Worksheet) -> None:
+    text_fill_colors = {
+        "Flavor Development Reference": FORMULA_SECTION_FILL_COLOR,
+        "Product Specification": FORMULA_SECTION_FILL_COLOR,
+        "Casing Rajangan": FORMULA_SECTION_FILL_COLOR,
+        "Casing Krosok": FORMULA_SECTION_FILL_COLOR,
+        "Top Flavor": FORMULA_SECTION_FILL_COLOR,
+        "Casing NAV Item Code": FORMULA_GENERAL_FILL_COLOR,
+        "Casing NAV Item Description": FORMULA_GENERAL_FILL_COLOR,
+        "Blend Ratio": FORMULA_GENERAL_FILL_COLOR,
+        "Casing Application (%)": FORMULA_GENERAL_FILL_COLOR,
+        "Top Flavor NAV Item Code": FORMULA_GENERAL_FILL_COLOR,
+        "Top Flavor Item Description": FORMULA_GENERAL_FILL_COLOR,
+        "TF Application (%)": FORMULA_GENERAL_FILL_COLOR,
+        "Casing Pre-Mix Formulation NAV Item Code": FORMULA_GENERAL_FILL_COLOR,
+        "Casing Pre-Mix Formulation NAV Item Description": FORMULA_GENERAL_FILL_COLOR,
+        "Flavor Pre-Mix Formulation NAV Item Code": FORMULA_GENERAL_FILL_COLOR,
+        "Flavor Pre-Mix Formulation NAV Item Description": FORMULA_GENERAL_FILL_COLOR,
+        "No": FORMULA_GENERAL_FILL_COLOR,
+        "Material NAV Item Code": FORMULA_GENERAL_FILL_COLOR,
+        "Material Name": FORMULA_GENERAL_FILL_COLOR,
+        "Physical State": FORMULA_GENERAL_FILL_COLOR,
+        "CAS Number": FORMULA_GENERAL_FILL_COLOR,
+        "Ratio (%)": FORMULA_GENERAL_FILL_COLOR,
+        "Dosage (mg/stick)": FORMULA_GENERAL_FILL_COLOR,
+        "Material Price (USD / KG)": FORMULA_GENERAL_FILL_COLOR,
+        "Formulation Price (USD / KG)": FORMULA_GENERAL_FILL_COLOR,
+        "Dosage (KG / MC)": FORMULA_GENERAL_FILL_COLOR,
+        "Density": FORMULA_GENERAL_FILL_COLOR,
+        "Addition Sequence": FORMULA_GENERAL_FILL_COLOR,
+        "Temperature": FORMULA_GENERAL_FILL_COLOR,
+        "Agitation Rate": FORMULA_GENERAL_FILL_COLOR,
+        "Mixing Duration": FORMULA_GENERAL_FILL_COLOR,
+        "Work Instruction": FORMULA_GENERAL_FILL_COLOR,
+    }
+    premix_title_texts = {
+        "Casing Pre-Mix",
+        "Casing Pre-Mix 2",
+        "Casing Pre-Mix 3",
+        "Flavor Pre-Mix 1",
+        "Flavor Pre-Mix 2",
+        "Flavor Pre-Mix 3",
+        "Flavor Pre-Mix 4",
+        "Flavor Pre-Mix 5",
+        "Casing Pre-Mix Formulation",
+        "Flavor Pre-Mix Formulation",
+    }
+
+    for cell_ref, color in {
+        "A9": FORMULA_SECTION_FILL_COLOR,
+        "H11": FORMULA_SECTION_FILL_COLOR,
+    }.items():
+        set_formula_cell_fill(ws, cell_ref, color)
+
+    for cell_ref in ("A10", "H10"):
+        set_wrap_text(ws[cell_ref], False)
+
+    for row in ws.iter_rows():
+        for cell in row:
+            if isinstance(cell, MergedCell):
+                continue
+            if not cell.font.bold:
+                continue
+            text = normalized_header_text(cell.value)
+            if text in premix_title_texts:
+                set_fill_color(cell, FORMULA_PREMIX_FILL_COLOR)
+                continue
+            color = text_fill_colors.get(text)
+            if color:
+                set_fill_color(cell, color)
 
 
 def apply_approval_block(
@@ -1282,7 +1419,7 @@ def apply_approval_block(
         top=Side(style="thin", color="000000"),
         bottom=Side(style="thin", color="000000"),
     )
-    title_fill = PatternFill("solid", fgColor="BFE3F0")
+    title_fill = PatternFill("solid", fgColor=FORMULA_SECTION_FILL_COLOR)
     white_fill = PatternFill(fill_type=None)
     empty_border = Border()
     for row in range(approval_row, cleanup_last_row + 1):
@@ -2068,8 +2205,14 @@ def write_formula_sheet(ws: openpyxl.worksheet.worksheet.Worksheet, formulation:
             set_cell_value(ws, row_index, FORMULA_MATERIAL_COLUMNS["no"], row_indices.index(row_index) + 1)
             set_cell_value(ws, row_index, FORMULA_MATERIAL_COLUMNS["item_code"], material.item_code)
             set_cell_value(ws, row_index, FORMULA_MATERIAL_COLUMNS["item_name"], material.item_name)
-            set_cell_value(ws, row_index, FORMULA_MATERIAL_COLUMNS["physical_form"], material.physical_form)
-            set_cell_value(ws, row_index, FORMULA_MATERIAL_COLUMNS["cas_number"], material.cas_number)
+            if formulation.uses_online_material_lookup:
+                physical_form_value = online_physical_form_formula(row_index)
+                cas_number_value = online_cas_number_formula(row_index)
+            else:
+                physical_form_value = material.physical_form
+                cas_number_value = material.cas_number
+            set_cell_value(ws, row_index, FORMULA_MATERIAL_COLUMNS["physical_form"], physical_form_value)
+            set_cell_value(ws, row_index, FORMULA_MATERIAL_COLUMNS["cas_number"], cas_number_value)
             if is_premix_phase(phase) and material.dosage_input_mode == "%":
                 ratio_value = percent_to_fraction(material.ratio_percent)
             elif material.dosage_input_mode == "%":
@@ -2088,7 +2231,9 @@ def write_formula_sheet(ws: openpyxl.worksheet.worksheet.Worksheet, formulation:
                 dosage_formula or material.dosage_mg_stick,
             )
             parent_premix_phase = parent_material_to_premix.get(id(material))
-            if parent_premix_phase and parent_premix_phase in SECTION_ROW_RANGES:
+            if formulation.uses_online_material_lookup:
+                material_price_value = online_material_price_formula(row_index)
+            elif parent_premix_phase and parent_premix_phase in SECTION_ROW_RANGES:
                 material_price_value = f"=J{SECTION_ROW_RANGES[parent_premix_phase][-1] + 1}"
             else:
                 material_price_value = material.material_price
@@ -2118,6 +2263,7 @@ def write_formula_sheet(ws: openpyxl.worksheet.worksheet.Worksheet, formulation:
     update_top_formula_summary(ws)
     apply_approval_block(ws, formulation)
     apply_formula_row_height(ws)
+    apply_generated_workbook_formatting(ws)
     apply_parent_bom_level1_fill(ws, phase_rows, parent_material_to_premix)
     lock_formula_cells(ws)
 
@@ -2137,7 +2283,10 @@ def generate_formulation_workbook(
     output_path = ensure_xlsx_output_path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     reset_runtime_layout()
-    material_db = load_material_db(material_db_path)
+    if formulation.uses_online_material_lookup and not Path(material_db_path).exists():
+        material_db = empty_material_db()
+    else:
+        material_db = load_material_db(material_db_path)
     validation_errors = validate_formulation_input(formulation, material_db)
     if validation_errors:
         raise ValueError("Validasi formulasi gagal:\n- " + "\n- ".join(validation_errors))
@@ -2151,10 +2300,17 @@ def generate_formulation_workbook(
     formula_sheet = workbook.create_sheet("Formula", 0)
     material_db_sheet = workbook.create_sheet("BOL-SAAT List", 1)
     clone_template_sheet_layout(template_workbook["Formula"], formula_sheet)
-    write_material_db_sheet(material_db_sheet, material_db_path)
+    if formulation.uses_online_material_lookup and not Path(material_db_path).exists():
+        write_material_db_sheet(material_db_sheet, material_db_path, material_db)
+    else:
+        write_material_db_sheet(material_db_sheet, material_db_path)
 
     write_input_sheet(workbook["INPUT"], formulation)
     write_formula_sheet(workbook["Formula"], formulation)
+    workbook["INPUT"].sheet_state = "hidden"
+    workbook["BOL-SAAT List"].sheet_state = "hidden"
+    workbook.properties.creator = WORKBOOK_AUTHOR
+    workbook.properties.lastModifiedBy = WORKBOOK_AUTHOR
     workbook.calculation.fullCalcOnLoad = True
     workbook.calculation.forceFullCalc = True
     workbook.calculation.calcMode = "auto"
@@ -2165,6 +2321,8 @@ def generate_formulation_workbook(
 
 def create_blank_input_workbook(template_path: Path) -> bytes:
     workbook = openpyxl.Workbook()
+    workbook.properties.creator = WORKBOOK_AUTHOR
+    workbook.properties.lastModifiedBy = WORKBOOK_AUTHOR
     input_sheet = workbook.active
     input_sheet.title = "INPUT"
 
@@ -2247,9 +2405,9 @@ def create_blank_input_workbook(template_path: Path) -> bytes:
     for row in range(2, 10):
         input_sheet.merge_cells(start_row=row, start_column=2, end_row=row, end_column=3)
     input_sheet.cell(row=8, column=2, value=DEFAULT_EFFECTIVE_DATE)
-    input_sheet.cell(row=8, column=2).number_format = "yyyy-mm-dd"
+    input_sheet.cell(row=8, column=2).number_format = DEFAULT_DATE_NUMBER_FORMAT
     input_sheet.cell(row=9, column=2, value=DEFAULT_EFFECTIVE_DATE)
-    input_sheet.cell(row=9, column=2).number_format = "yyyy-mm-dd"
+    input_sheet.cell(row=9, column=2).number_format = DEFAULT_DATE_NUMBER_FORMAT
     input_sheet.cell(row=3, column=2, value=build_input_formula_code_formula())
     for row in (3, 5, 6, 7, 8, 9):
         input_sheet.merge_cells(start_row=row, start_column=11, end_row=row, end_column=12)
@@ -2465,6 +2623,7 @@ def build_formulation_input_from_dict(data: Dict[str, Any], material_rows: Itera
         phase_metadata=phase_metadata,
         materials=materials,
         bypass_material_lookup=bool(data.get("bypass_material_lookup", False)),
+        material_lookup_source=str(data.get("material_lookup_source") or MATERIAL_LOOKUP_SOURCE_LOCAL).strip().lower(),
     )
 
 
@@ -2522,6 +2681,7 @@ def export_formulation_model(formulation: FormulationInput) -> Dict[str, Any]:
         "lab_personnel_involved": formulation.prepared_by,
         "prepared_by_name": formulation.prepared_by_name,
         "bypass_material_lookup": formulation.bypass_material_lookup,
+        "material_lookup_source": formulation.material_lookup_source,
     }
 
     phase_metadata = [
@@ -2588,6 +2748,8 @@ def export_formulation_model_xlsx(formulation: FormulationInput) -> bytes:
         pd.DataFrame([model["product"]]).to_excel(writer, sheet_name="product", index=False)
         pd.DataFrame(model["phase_metadata"]).to_excel(writer, sheet_name="phase_metadata", index=False)
         pd.DataFrame(model["materials"]).to_excel(writer, sheet_name="materials", index=False)
+        writer.book.properties.creator = WORKBOOK_AUTHOR
+        writer.book.properties.lastModifiedBy = WORKBOOK_AUTHOR
 
         for worksheet in writer.book.worksheets:
             worksheet.freeze_panes = "A2"

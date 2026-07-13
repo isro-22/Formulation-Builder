@@ -148,11 +148,25 @@ Scraped files are saved to:
 
 ## Reference Data
 
+Before generating a workbook, users can choose one of two material lookup sources.
+
+### Local Data
+
 Material lookup and chemical prices are read from:
 
 `references/BOL-SAAT List.xlsx`
 
 The generator uses this file as the material master reference database.
+
+### Online Data
+
+The generated workbook writes SharePoint `XLOOKUP` formulas directly into the material table:
+
+- `Physical State` looks up the online `Physical Form` value.
+- `CAS Number` looks up the online CAS value.
+- `Material Price (USD / KG)` looks up the online price value.
+
+The formulas use semicolon (`;`) argument separators and automatically reference the generated material row, for example `B148`, `B149`, and so on.
 
 ## Database Model
 

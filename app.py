@@ -16,6 +16,8 @@ from formulation_generator import (
     DEFAULT_REVIEWED_BY,
     DEFAULT_REVIEWED_POSITION,
     INPUT_METADATA_POSITIONS,
+    MATERIAL_LOOKUP_SOURCE_LOCAL,
+    MATERIAL_LOOKUP_SOURCE_ONLINE,
     MATERIAL_COLUMNS,
     MATERIAL_HEADER_ROW,
     MATERIAL_START_ROW,
@@ -531,6 +533,16 @@ st.markdown(
     .stDownloadButton > button {
         min-height: 2.65rem;
     }
+    div[data-testid="stDownloadButton"]:has(button[kind="primary"]) button {
+        background: #1f7aef;
+        border-color: #1f7aef;
+        color: #ffffff;
+    }
+    div[data-testid="stDownloadButton"]:has(button[kind="primary"]) button:hover {
+        background: #1767cc;
+        border-color: #1767cc;
+        color: #ffffff;
+    }
     @media (max-width: 760px) {
         .block-container {
             padding-left: 0.85rem;
@@ -884,6 +896,24 @@ bypass_material_lookup = st.checkbox(
     value=bool(excel_data.get("bypass_material_lookup", False)),
     help="Aktifkan jika item code belum ada di BOL-SAAT List. Data tetap digenerate dari input, dengan master fields/harga kosong atau 0.",
 )
+lookup_options = {
+    "Local data": MATERIAL_LOOKUP_SOURCE_LOCAL,
+    "Online data": MATERIAL_LOOKUP_SOURCE_ONLINE,
+}
+uploaded_lookup_source = str(excel_data.get("material_lookup_source") or MATERIAL_LOOKUP_SOURCE_LOCAL).strip().lower()
+lookup_option_labels = list(lookup_options.keys())
+lookup_option_values = list(lookup_options.values())
+material_lookup_source_label = st.radio(
+    "Material lookup source",
+    options=lookup_option_labels,
+    index=lookup_option_values.index(uploaded_lookup_source) if uploaded_lookup_source in lookup_option_values else 0,
+    horizontal=True,
+    help=(
+        "Local data reads references/BOL-SAAT List.xlsx. "
+        "Online data writes SharePoint XLOOKUP formulas for Physical Form, CAS Number, and Material Price."
+    ),
+)
+material_lookup_source = lookup_options[material_lookup_source_label]
 material_records = dataframe_to_material_records(materials_df)
 
 current_form_data = {
@@ -915,6 +945,7 @@ current_form_data = {
     "cooling": cooling,
     "phase_metadata": phase_metadata,
     "bypass_material_lookup": bypass_material_lookup,
+    "material_lookup_source": material_lookup_source,
 }
 
 
@@ -1003,13 +1034,24 @@ if generate_clicked:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_path = OUTPUT_DIR / f"Generated_Formulation_Sheet_{safe_formula_code}_{timestamp}.xlsx"
             result_path = generate_formulation_workbook(formulation_input, TEMPLATE_PATH, output_path)
-            st.success(f"Formulasi berhasil dibuat: {result_path.name}")
-            with open(result_path, "rb") as f:
-                st.download_button(
-                    "Download hasil formulasi",
-                    f,
-                    file_name=result_path.name,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
+            st.session_state["generated_formulation_result"] = {
+                "name": result_path.name,
+                "bytes": result_path.read_bytes(),
+            }
         except Exception as exc:
             st.error(str(exc))
+
+if "generated_formulation_result" in st.session_state:
+    generated_result = st.session_state["generated_formulation_result"]
+    result_status_col, result_download_col = st.columns([4, 1.35], vertical_alignment="center")
+    with result_status_col:
+        st.success(f"Formulasi berhasil dibuat: {generated_result['name']}")
+    with result_download_col:
+        st.download_button(
+            "Download hasil formulasi",
+            generated_result["bytes"],
+            file_name=generated_result["name"],
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            use_container_width=True,
+        )
