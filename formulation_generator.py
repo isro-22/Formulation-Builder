@@ -5,6 +5,7 @@ import json
 import re
 from datetime import date as date_class, datetime
 from dataclasses import dataclass, field
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -527,10 +528,9 @@ def desired_section_row_count(rows: List["MaterialInput"]) -> int:
     return EMPTY_SECTION_ROW_COUNT
 
 
-def load_material_db(material_db_path: Path = MATERIAL_DB_PATH) -> pd.DataFrame:
-    material_db_path = Path(material_db_path)
-    if not material_db_path.exists():
-        raise FileNotFoundError(f"Reference chemical database tidak ditemukan: {material_db_path}")
+@lru_cache(maxsize=8)
+def _load_material_db_cached(material_db_path_str: str, mtime_ns: int) -> pd.DataFrame:
+    material_db_path = Path(material_db_path_str)
     df = pd.read_excel(material_db_path, sheet_name="BOL-SAAT List", engine="openpyxl")
     columns = {col: col for col in df.columns}
     normalized = {
@@ -551,6 +551,17 @@ def load_material_db(material_db_path: Path = MATERIAL_DB_PATH) -> pd.DataFrame:
     df["item_code"] = df["item_code"].astype(str).str.strip()
     df["item_name"] = df["item_name"].astype(str).str.strip()
     return df
+
+def load_material_db(material_db_path: Path = MATERIAL_DB_PATH) -> pd.DataFrame:
+    material_db_path = Path(material_db_path)
+    if not material_db_path.exists():
+        raise FileNotFoundError(f"Reference chemical database tidak ditemukan: {material_db_path}")
+    cached_df = _load_material_db_cached(str(material_db_path.resolve()), material_db_path.stat().st_mtime_ns)
+    return cached_df.copy()
+
+@lru_cache(maxsize=8)
+def _read_material_db_sheet_cached(material_db_path_str: str, mtime_ns: int) -> pd.DataFrame:
+    return pd.read_excel(Path(material_db_path_str), sheet_name="BOL-SAAT List", engine="openpyxl")
 
 
 def lookup_material_record(df: pd.DataFrame, item_code: Optional[str], item_name: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -1901,11 +1912,15 @@ def clone_template_sheet_layout(
 def write_material_db_sheet(
     ws: openpyxl.worksheet.worksheet.Worksheet,
     material_db_path: Path = MATERIAL_DB_PATH,
+    material_db: Optional[pd.DataFrame] = None,
 ) -> None:
     material_db_path = Path(material_db_path)
-    if not material_db_path.exists():
+    if material_db is None and not material_db_path.exists():
         raise FileNotFoundError(f"Reference chemical database tidak ditemukan: {material_db_path}")
-    df = pd.read_excel(material_db_path, sheet_name="BOL-SAAT List", engine="openpyxl")
+    if material_db is None:
+        df = _read_material_db_sheet_cached(str(material_db_path.resolve()), material_db_path.stat().st_mtime_ns).copy()
+    else:
+        df = material_db
     header_fill = PatternFill("solid", fgColor="D9EAD3")
     border = Border(
         left=Side(style="thin", color="D9D9D9"),

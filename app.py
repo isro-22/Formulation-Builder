@@ -1,4 +1,6 @@
 from datetime import date as date_class, datetime
+import json
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -436,6 +438,31 @@ def parse_excel_input(uploaded_file) -> Tuple[Dict[str, Any], List[Dict[str, Any
 
 st.set_page_config(page_title="Formulation Builder", layout="wide")
 
+@st.cache_data(show_spinner=False)
+def create_blank_input_workbook_cached(template_path: str, template_mtime_ns: int) -> bytes:
+    return create_blank_input_workbook(Path(template_path))
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def parse_excel_input_cached(source_bytes: bytes) -> Tuple[Dict[str, Any], List[Dict[str, Any]], List[str]]:
+    return parse_excel_input(BytesIO(source_bytes))
+
+@st.cache_data(show_spinner=False, max_entries=32)
+def export_model_downloads_cached(form_data_json: str, material_records_json: str) -> Tuple[bytes, bytes]:
+    form_data = json.loads(form_data_json)
+    material_records = json.loads(material_records_json)
+    formulation_input = build_formulation_input_from_dict(form_data, material_records)
+    return (
+        export_formulation_model_json(formulation_input),
+        export_formulation_model_xlsx(formulation_input),
+    )
+
+def dataframe_to_material_records(dataframe: pd.DataFrame) -> List[Dict[str, Any]]:
+    clean_dataframe = dataframe[material_columns].where(pd.notna(dataframe[material_columns]), None)
+    return clean_dataframe.to_dict(orient="records")
+
+def stable_json_dumps(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=str)
+
 st.markdown(
     """
     <style>
@@ -478,7 +505,8 @@ st.markdown(
         flex-wrap: wrap;
     }
     div[data-testid="stRadio"] div[role="radiogroup"] label {
-        min-width: 260px;
+        min-width: clamp(180px, 32vw, 260px);
+        flex: 1 1 220px;
         padding: 0.72rem 0.9rem;
         border: 1px solid #d5dee2;
         border-radius: 8px;
@@ -498,6 +526,29 @@ st.markdown(
     div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) p {
         color: #0f4c5c;
         font-weight: 760;
+    }
+    .stButton > button,
+    .stDownloadButton > button {
+        min-height: 2.65rem;
+    }
+    @media (max-width: 760px) {
+        .block-container {
+            padding-left: 0.85rem;
+            padding-right: 0.85rem;
+        }
+        .workspace-header {
+            margin-top: -0.75rem;
+            padding: 1rem;
+        }
+        .workspace-header h1 {
+            font-size: 1.35rem;
+        }
+        div[data-testid="stRadio"] {
+            padding: 0.7rem;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] label {
+            min-width: 100%;
+        }
     }
     </style>
     <div class="workspace-header">
@@ -526,7 +577,10 @@ st.markdown(
 
 if TEMPLATE_PATH.exists():
     try:
-        blank_input_bytes = create_blank_input_workbook(TEMPLATE_PATH)
+        blank_input_bytes = create_blank_input_workbook_cached(
+            str(TEMPLATE_PATH.resolve()),
+            TEMPLATE_PATH.stat().st_mtime_ns,
+        )
         st.download_button(
             "Download blank INPUT template",
             blank_input_bytes,
@@ -543,7 +597,7 @@ upload_warnings: List[str] = []
 upload_error = None
 if uploaded_input:
     try:
-        excel_data, excel_materials, upload_warnings = parse_excel_input(uploaded_input)
+        excel_data, excel_materials, upload_warnings = parse_excel_input_cached(uploaded_input.getvalue())
         st.success("Data INPUT berhasil dimuat dari file. Silakan review dan sesuaikan jika perlu.")
         if upload_warnings:
             with st.expander(f"Upload warnings ({len(upload_warnings)})", expanded=True):
@@ -830,6 +884,7 @@ bypass_material_lookup = st.checkbox(
     value=bool(excel_data.get("bypass_material_lookup", False)),
     help="Aktifkan jika item code belum ada di BOL-SAAT List. Data tetap digenerate dari input, dengan master fields/harga kosong atau 0.",
 )
+material_records = dataframe_to_material_records(materials_df)
 
 current_form_data = {
     "product_name": product_name,
@@ -864,7 +919,6 @@ current_form_data = {
 
 
 def collect_current_issues() -> List[Dict[str, Any]]:
-    material_records = materials_df[material_columns].to_dict(orient="records")
     return (
         collect_header_issues(
             product_name,
@@ -886,7 +940,7 @@ with generate_col:
 
 if save_clicked:
     st.session_state["saved_form_data"] = current_form_data
-    st.session_state["saved_materials"] = materials_df[material_columns].to_dict(orient="records")
+    st.session_state["saved_materials"] = material_records
     st.session_state["validation_issues"] = collect_current_issues()
 
 if "validation_issues" in st.session_state:
@@ -909,12 +963,10 @@ if "validation_issues" in st.session_state:
     else:
         st.success("Draft tersimpan dan valid. Data siap digenerate.")
 
-model_formulation_input = build_formulation_input_from_dict(
-    current_form_data,
-    materials_df[material_columns].to_dict(orient="records"),
+model_json_bytes, model_xlsx_bytes = export_model_downloads_cached(
+    stable_json_dumps(current_form_data),
+    stable_json_dumps(material_records),
 )
-model_json_bytes = export_formulation_model_json(model_formulation_input)
-model_xlsx_bytes = export_formulation_model_xlsx(model_formulation_input)
 with st.expander("Model Downloads", expanded=True):
     json_col, xlsx_col, spacer_col = st.columns([1, 1, 3])
     with json_col:
@@ -946,7 +998,6 @@ if generate_clicked:
                 st.dataframe(pd.DataFrame(preflight_issues), width="stretch", hide_index=True)
                 st.stop()
 
-            material_records = materials_df[material_columns].to_dict(orient="records")
             formulation_input = build_formulation_input_from_dict(current_form_data, material_records)
             safe_formula_code = "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in formula_code.strip()) or "Formulation"
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
