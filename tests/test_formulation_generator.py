@@ -21,10 +21,12 @@ from formulation_generator import (
     FORMULA_ROW_HEIGHT_POINTS,
     FORMULA_SECTION_FILL_COLOR,
     FORMULA_MATERIAL_COLUMNS,
+    FORMULA_NUMERIC_METADATA_FORMAT,
     INPUT_SOURCE_FONT_COLOR,
     MATERIAL_LOOKUP_SOURCE_ONLINE,
     MATERIAL_DB_PATH,
     PARENT_BOM_LEVEL1_FILL_COLOR,
+    PHASE_METADATA_POSITIONS,
     PHASE_PERCENT_FORMAT,
     SECTION_ROW_RANGES,
     USD_ACCOUNTING_FORMAT,
@@ -359,6 +361,27 @@ class TestFormulationGenerator(unittest.TestCase):
         self.assertEqual(formula_sheet.cell(row=3, column=17).value, DEFAULT_EFFECTIVE_DATE)
         self.assertEqual(formula_sheet.cell(row=3, column=17).number_format, DEFAULT_DATE_NUMBER_FORMAT)
 
+    def test_sensory_metadata_cells_are_numeric_formatted(self):
+        form_data = deepcopy(self.form_data)
+        form_data.update({
+            "impact": "1",
+            "flavor_aroma": "2.5",
+            "irritation": "3,75",
+            "cooling": 4,
+        })
+        workbook = self.generate_workbook(form_data=form_data)
+        formula_sheet = workbook["Formula"]
+
+        expected_values = {
+            "J13": 1.0,
+            "J14": 2.5,
+            "J15": 3.75,
+            "J16": 4,
+        }
+        for cell_ref, expected_value in expected_values.items():
+            self.assertEqual(formula_sheet[cell_ref].value, expected_value)
+            self.assertEqual(formula_sheet[cell_ref].number_format, FORMULA_NUMERIC_METADATA_FORMAT)
+
     def test_casing_top_flavor_summary_uses_phase_description_totals_and_usd_price(self):
         workbook = self.generate_workbook()
         formula_sheet = workbook["Formula"]
@@ -598,30 +621,40 @@ class TestFormulationGenerator(unittest.TestCase):
         )
         self.assertEqual(
             formula_sheet.cell(row=row, column=FORMULA_MATERIAL_COLUMNS["physical_form"]).value,
-            f'=IFNA(_xlfn.XLOOKUP(B{row},{expected_source}!$L:$L,{expected_source}!$W:$W),"")',
+            f'=IFNA(XLOOKUP(B{row},{expected_source}!$L:$L,{expected_source}!$W:$W),"")',
         )
         self.assertEqual(
             formula_sheet.cell(row=row, column=FORMULA_MATERIAL_COLUMNS["cas_number"]).value,
-            f'=IFNA(_xlfn.XLOOKUP(B{row},{expected_source}!$L:$L,{expected_source}!$J:$J),"")',
+            f'=IFNA(XLOOKUP(B{row},{expected_source}!$L:$L,{expected_source}!$J:$J),"")',
         )
         self.assertEqual(
             formula_sheet.cell(row=row, column=FORMULA_MATERIAL_COLUMNS["material_price"]).value,
-            f"=IFNA(_xlfn.XLOOKUP(B{row},{expected_source}!$L:$L,{expected_source}!$K:$K),0)",
+            f"=IFNA(XLOOKUP(B{row},{expected_source}!$L:$L,{expected_source}!$K:$K),0)",
         )
+        formulas = [
+            cell.value
+            for worksheet in workbook.worksheets
+            for row_cells in worksheet.iter_rows()
+            for cell in row_cells
+            if isinstance(cell.value, str) and cell.value.startswith("=")
+        ]
+        self.assertFalse(any("=@IFNA" in formula for formula in formulas))
+        self.assertFalse(any("@IFNA(" in formula for formula in formulas))
+        self.assertFalse(any("_xlfn.XLOOKUP" in formula for formula in formulas))
         for phase in ("Casing Rajangan", "Casing Krosok", "Top Flavor"):
             for material_row in SECTION_ROW_RANGES[phase]:
                 if formula_sheet.cell(row=material_row, column=FORMULA_MATERIAL_COLUMNS["item_code"]).value is None:
                     continue
                 self.assertIn(
-                    f"_xlfn.XLOOKUP(B{material_row},",
+                    f"XLOOKUP(B{material_row},",
                     formula_sheet.cell(row=material_row, column=FORMULA_MATERIAL_COLUMNS["physical_form"]).value,
                 )
                 self.assertIn(
-                    f"_xlfn.XLOOKUP(B{material_row},",
+                    f"XLOOKUP(B{material_row},",
                     formula_sheet.cell(row=material_row, column=FORMULA_MATERIAL_COLUMNS["cas_number"]).value,
                 )
                 self.assertIn(
-                    f"_xlfn.XLOOKUP(B{material_row},",
+                    f"XLOOKUP(B{material_row},",
                     formula_sheet.cell(row=material_row, column=FORMULA_MATERIAL_COLUMNS["material_price"]).value,
                 )
 
@@ -646,22 +679,32 @@ class TestFormulationGenerator(unittest.TestCase):
         ])
         workbook = self.generate_workbook(form_data=form_data, material_rows=material_rows)
         formula_sheet = workbook["Formula"]
+        rajangan_row = SECTION_ROW_RANGES["Casing Rajangan"][0]
+        rajangan_application_row = PHASE_METADATA_POSITIONS["Casing Rajangan"]["application"][0]
+        rajangan_blend_row = PHASE_METADATA_POSITIONS["Casing Rajangan"]["blend_ratio"][0]
+        krosok_blend_row = PHASE_METADATA_POSITIONS["Casing Krosok"]["blend_ratio"][0]
 
-        self.assertEqual(formula_sheet.cell(row=26, column=FORMULA_MATERIAL_COLUMNS["ratio"]).value, 0.38)
+        self.assertEqual(formula_sheet.cell(row=rajangan_row, column=FORMULA_MATERIAL_COLUMNS["ratio"]).value, 0.38)
         self.assertTrue(
-            font_rgb(formula_sheet.cell(row=26, column=FORMULA_MATERIAL_COLUMNS["ratio"])).endswith(
+            font_rgb(formula_sheet.cell(row=rajangan_row, column=FORMULA_MATERIAL_COLUMNS["ratio"])).endswith(
                 INPUT_SOURCE_FONT_COLOR
             )
         )
         self.assertEqual(
-            font_rgb(formula_sheet.cell(row=26, column=FORMULA_MATERIAL_COLUMNS["dosage_mg_stick"])),
+            font_rgb(formula_sheet.cell(row=rajangan_row, column=FORMULA_MATERIAL_COLUMNS["dosage_mg_stick"])),
             "00000000",
         )
         self.assertEqual(
-            formula_sheet.cell(row=26, column=FORMULA_MATERIAL_COLUMNS["dosage_mg_stick"]).value,
-            "=G26*($C$18-$F$18)*$E$24*($E$23/($E$23+$E$36))",
+            formula_sheet.cell(row=rajangan_row, column=FORMULA_MATERIAL_COLUMNS["dosage_mg_stick"]).value,
+            (
+                f"=G{rajangan_row}*($C$18-$F$18)*$E${rajangan_application_row}"
+                f"*($E${rajangan_blend_row}/($E${rajangan_blend_row}+$E${krosok_blend_row}))"
+            ),
         )
-        self.assertEqual(formula_sheet.cell(row=26, column=FORMULA_MATERIAL_COLUMNS["dosage_mg_stick"]).number_format, "0.00000")
+        self.assertEqual(
+            formula_sheet.cell(row=rajangan_row, column=FORMULA_MATERIAL_COLUMNS["dosage_mg_stick"]).number_format,
+            "0.00000",
+        )
 
     def test_percent_mode_uses_phase_metadata_application_without_material_application_column(self):
         form_data = deepcopy(self.form_data)
@@ -698,11 +741,13 @@ class TestFormulationGenerator(unittest.TestCase):
 
         workbook = self.generate_workbook(form_data=form_data, material_rows=material_rows)
         formula_sheet = workbook["Formula"]
+        top_flavor_row = SECTION_ROW_RANGES["Top Flavor"][0]
+        top_flavor_application_row = PHASE_METADATA_POSITIONS["Top Flavor"]["application"][0]
 
-        self.assertEqual(formula_sheet.cell(row=52, column=FORMULA_MATERIAL_COLUMNS["ratio"]).value, 0.2)
+        self.assertEqual(formula_sheet.cell(row=top_flavor_row, column=FORMULA_MATERIAL_COLUMNS["ratio"]).value, 0.2)
         self.assertEqual(
-            formula_sheet.cell(row=52, column=FORMULA_MATERIAL_COLUMNS["dosage_mg_stick"]).value,
-            "=G52*($C$18-$F$18)*$E$50",
+            formula_sheet.cell(row=top_flavor_row, column=FORMULA_MATERIAL_COLUMNS["dosage_mg_stick"]).value,
+            f"=G{top_flavor_row}*($C$18-$F$18)*$E${top_flavor_application_row}",
         )
 
     def test_casing_krosok_percent_formula_uses_dynamic_blend_share(self):
@@ -1003,6 +1048,119 @@ class TestFormulationGenerator(unittest.TestCase):
                 self.assertIsNone(border.right.style if border.right else None)
                 self.assertIsNone(border.top.style if border.top else None)
                 self.assertIsNone(border.bottom.style if border.bottom else None)
+
+    def test_material_table_borders_remain_for_all_phases_with_more_than_five_rows(self):
+        phases = [
+            "Casing Rajangan",
+            "Casing Krosok",
+            "Top Flavor",
+            "Casing Pre-Mix",
+            "Casing Pre-Mix 2",
+            "Casing Pre-Mix 3",
+            "Flavor Pre-Mix 1",
+            "Flavor Pre-Mix 2",
+            "Flavor Pre-Mix 3",
+            "Flavor Pre-Mix 4",
+            "Flavor Pre-Mix 5",
+        ]
+        form_data = {**deepcopy(self.form_data), "bypass_material_lookup": True}
+        for phase in phases:
+            if phase not in form_data["phase_metadata"] and (
+                phase.startswith("Casing Pre-Mix") or phase.startswith("Flavor Pre-Mix")
+            ):
+                phase_code = phase.upper().replace(" ", "-")
+                form_data["phase_metadata"][phase] = {
+                    "nav_code": f"GEN-{phase_code}",
+                    "description": f"{phase} TEST",
+                    "blend_ratio": None,
+                    "application": None,
+                }
+
+        material_rows = []
+        for phase in phases:
+            for index in range(6):
+                material_rows.append({
+                    "phase": phase,
+                    "item_code": f"GEN-{phase[:2].upper()}-{index:05d}",
+                    "item_name": f"{phase} MATERIAL {index}",
+                    "dosage_mg_stick": 1.0 + index,
+                    "addition_sequence": index + 1,
+                })
+
+        workbook = self.generate_workbook(form_data=form_data, material_rows=material_rows)
+        formula_sheet = workbook["Formula"]
+
+        for phase in phases:
+            self.assertIn(phase, SECTION_ROW_RANGES)
+            for row in SECTION_ROW_RANGES[phase][:6]:
+                for column in (1, 2, 3, 5, 17):
+                    border = formula_sheet.cell(row=row, column=column).border
+                    self.assertEqual(border.left.style, "thin", f"{phase} row {row} col {column} left")
+                    self.assertEqual(border.right.style, "thin", f"{phase} row {row} col {column} right")
+                    self.assertEqual(border.top.style, "thin", f"{phase} row {row} col {column} top")
+                    self.assertEqual(border.bottom.style, "thin", f"{phase} row {row} col {column} bottom")
+
+        ordered_phases = sorted(phases, key=lambda phase: SECTION_ROW_RANGES[phase][0])
+        for previous_phase, next_phase in zip(ordered_phases, ordered_phases[1:]):
+            previous_total_row = SECTION_ROW_RANGES[previous_phase][-1] + 1
+            separator_row = previous_total_row + 1
+            next_title_row = PHASE_METADATA_POSITIONS[next_phase]["nav_code"][0] - 1
+            if next_title_row > separator_row + 1:
+                continue
+            self.assertEqual(next_title_row, separator_row + 1, f"{previous_phase} to {next_phase}")
+            self.assertFalse(formula_sheet.row_dimensions[separator_row].hidden)
+            self.assertEqual(
+                [
+                    row
+                    for row in range(previous_total_row + 1, next_title_row)
+                    if not formula_sheet.row_dimensions[row].hidden
+                ],
+                [separator_row],
+                f"{previous_phase} to {next_phase}",
+            )
+            for column in range(1, 18):
+                self.assertIsNone(formula_sheet.cell(row=separator_row, column=column).value)
+                border = formula_sheet.cell(row=separator_row, column=column).border
+                self.assertIsNone(border.left.style if border.left else None)
+                self.assertIsNone(border.right.style if border.right else None)
+                self.assertIsNone(border.top.style if border.top else None)
+                self.assertIsNone(border.bottom.style if border.bottom else None)
+
+    def test_empty_premix_sections_are_not_rendered(self):
+        premix_rows = [
+            {
+                "phase": "Flavor Pre-Mix 1",
+                "item_code": "GEN-WA-00001",
+                "item_name": "WATER",
+                "dosage_mg_stick": 1.0,
+                "addition_sequence": 1,
+            },
+        ]
+        formulation = self.build_formulation(material_rows=self.with_required_main_phases(premix_rows))
+
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "single_flavor_premix.xlsx"
+            generate_formulation_workbook(formulation, self.template_path, output_path)
+            workbook = openpyxl.load_workbook(output_path, data_only=False)
+            formula_sheet = workbook["Formula"]
+
+        self.assertIn("Flavor Pre-Mix 1", SECTION_ROW_RANGES)
+        self.assertNotIn("Casing Pre-Mix", SECTION_ROW_RANGES)
+        self.assertNotIn("Flavor Pre-Mix 2", SECTION_ROW_RANGES)
+        self.assertNotIn("Casing Pre-Mix Formulation NAV Item Code", [
+            cell.value
+            for row in formula_sheet.iter_rows()
+            for cell in row
+        ])
+        self.assertEqual(
+            [
+                cell.value
+                for row in formula_sheet.iter_rows()
+                for cell in row
+                if cell.value == "Flavor Pre-Mix Formulation NAV Item Code"
+            ],
+            ["Flavor Pre-Mix Formulation NAV Item Code"],
+        )
 
     def test_premix_phase_expands_when_materials_exceed_base_capacity(self):
         premix_rows = []

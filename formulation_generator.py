@@ -51,6 +51,7 @@ DEFAULT_REVIEWED_BY = "Mochamad Setyawan"
 DEFAULT_REVIEWED_POSITION = "Senior Manager - Flavourist"
 DEFAULT_APPROVED_BY = "Andrew Yip"
 DEFAULT_APPROVED_POSITION = "Head, Flavour PDI"
+FORMULA_SECTION_SEPARATOR_ROWS = 1
 
 
 MAIN_PHASES = [
@@ -124,6 +125,13 @@ FORMULA_METADATA_POSITIONS = {
     "clove_weight_mg_stick": (18, 6),
     "stick_per_mc": (18, 10),
 }
+FORMULA_NUMERIC_METADATA_FIELDS = {
+    "impact",
+    "flavor_aroma",
+    "irritation",
+    "cooling",
+}
+FORMULA_NUMERIC_METADATA_FORMAT = "0.00"
 
 INPUT_METADATA_POSITIONS = {
     "product_name": (2, 2),
@@ -512,7 +520,7 @@ def percent_mode_dosage_formula(material: MaterialInput, row_index: int) -> Opti
 
 def online_material_lookup_formula(row_index: int, result_column: str, fallback: Any) -> str:
     return (
-        f"=IFNA(_xlfn.XLOOKUP(B{row_index},{ONLINE_CHEMICAL_MASTER_REF}!$L:$L,"
+        f"=IFNA(XLOOKUP(B{row_index},{ONLINE_CHEMICAL_MASTER_REF}!$L:$L,"
         f"{ONLINE_CHEMICAL_MASTER_REF}!${result_column}:${result_column}),{fallback})"
     )
 
@@ -803,10 +811,32 @@ def writable_cell(ws: openpyxl.worksheet.worksheet.Worksheet, row: int, column: 
     return cell
 
 
+def normalize_formula_text(value: Any) -> Any:
+    if isinstance(value, str) and value.startswith("="):
+        return value.replace("=@IFNA", "=IFNA")
+    return value
+
+def coerce_numeric_metadata_value(value: Any) -> Any:
+    if value in (None, ""):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return value
+        if "," in normalized and "." not in normalized:
+            normalized = normalized.replace(",", ".")
+        try:
+            return float(normalized)
+        except ValueError:
+            return value
+    return value
+
 def set_cell_value(ws: openpyxl.worksheet.worksheet.Worksheet, row: int, column: int, value: Any) -> None:
     cell = writable_cell(ws, row, column)
     if cell is not None and not isinstance(cell, MergedCell):
-        cell.value = value
+        cell.value = normalize_formula_text(value)
 
 
 def set_cell_reference_value(ws: openpyxl.worksheet.worksheet.Worksheet, cell_ref: str, value: Any) -> None:
@@ -934,7 +964,10 @@ def premix_insert_row(phase: str) -> int:
         for phase_name in SECTION_ROW_RANGES
         if is_premix_phase(phase_name)
     ]
-    return max(SECTION_ROW_RANGES[phase_name][-1] + 2 for phase_name in premix_phases)
+    return max(
+        SECTION_ROW_RANGES[phase_name][-1] + 2 + FORMULA_SECTION_SEPARATOR_ROWS
+        for phase_name in premix_phases
+    )
 
 
 def ensure_dynamic_premix_layouts(
@@ -952,7 +985,7 @@ def ensure_dynamic_premix_layouts(
         source_phase = premix_source_phase(phase)
         source_rows = SECTION_ROW_RANGES[source_phase]
         source_start = PHASE_METADATA_POSITIONS[source_phase]["nav_code"][0] - 1
-        source_end = source_rows[-1] + 1
+        source_end = source_rows[-1] + 1 + FORMULA_SECTION_SEPARATOR_ROWS
         block_height = source_end - source_start + 1
         insert_at = premix_insert_row(phase)
 
@@ -965,11 +998,10 @@ def ensure_dynamic_premix_layouts(
             copy_row_content_and_style(ws, shifted_source_start + offset, insert_at + offset)
         copy_merged_ranges_for_block(ws, shifted_source_start, shifted_source_end, insert_at)
 
-        new_rows = [
-            insert_at + (row - shifted_source_start)
-            for row in range(shifted_source_start, shifted_source_end + 1)
-            if shifted_source_start + 4 <= row <= shifted_source_end - 1
-        ]
+        new_rows = []
+        for source_row in source_rows:
+            shifted_source_row = source_row + block_height if source_row >= insert_at else source_row
+            new_rows.append(insert_at + (shifted_source_row - shifted_source_start))
         SECTION_ROW_RANGES[phase] = new_rows
         PHASE_METADATA_POSITIONS[phase] = {
             "nav_code": (insert_at + 1, 5),
@@ -1001,7 +1033,7 @@ def unmerge_blocking_material_ranges(ws: openpyxl.worksheet.worksheet.Worksheet)
                 continue
 
         source = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
-        ws.unmerge_cells(str(merged_range))
+        safe_unmerge_cells(ws, merged_range)
         for row in range(merged_range.min_row, merged_range.max_row + 1):
             for column in range(merged_range.min_col, merged_range.max_col + 1):
                 target = ws.cell(row=row, column=column)
@@ -1030,7 +1062,7 @@ def enforce_material_name_merges(ws: openpyxl.worksheet.worksheet.Worksheet) -> 
             )
             if overlaps_name_cells and not same_row_name_merge:
                 source = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
-                ws.unmerge_cells(str(merged_range))
+                safe_unmerge_cells(ws, merged_range)
                 for unmerged_row in range(merged_range.min_row, merged_range.max_row + 1):
                     for column in range(merged_range.min_col, merged_range.max_col + 1):
                         copy_cell_format(source, ws.cell(row=unmerged_row, column=column))
@@ -1046,6 +1078,15 @@ def enforce_material_name_merges(ws: openpyxl.worksheet.worksheet.Worksheet) -> 
         ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=4)
 
 
+def safe_unmerge_cells(ws: openpyxl.worksheet.worksheet.Worksheet, merged_range: CellRange) -> None:
+    try:
+        ws.unmerge_cells(str(merged_range))
+    except KeyError:
+        try:
+            ws.merged_cells.ranges.remove(merged_range)
+        except (KeyError, ValueError):
+            pass
+
 def unmerge_ranges_overlapping_rows(
     ws: openpyxl.worksheet.worksheet.Worksheet,
     first_row: int,
@@ -1055,7 +1096,7 @@ def unmerge_ranges_overlapping_rows(
         if merged_range.max_row < first_row or merged_range.min_row > last_row:
             continue
         source = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
-        ws.unmerge_cells(str(merged_range))
+        safe_unmerge_cells(ws, merged_range)
         for row in range(merged_range.min_row, merged_range.max_row + 1):
             for column in range(merged_range.min_col, merged_range.max_col + 1):
                 target = ws.cell(row=row, column=column)
@@ -1066,9 +1107,20 @@ def prepare_dynamic_formula_sections(
     ws: openpyxl.worksheet.worksheet.Worksheet,
     phase_rows: Dict[str, List[MaterialInput]],
 ) -> None:
-    for phase in DYNAMIC_FORMULA_PHASES:
+    for phase in list(DYNAMIC_FORMULA_PHASES):
         rows = phase_rows.get(phase, [])
         base_row_indices = SECTION_ROW_RANGES[phase]
+        if is_premix_phase(phase) and not rows:
+            title_row = PHASE_METADATA_POSITIONS[phase]["nav_code"][0] - 1
+            section_end = base_row_indices[-1] + 1 + FORMULA_SECTION_SEPARATOR_ROWS
+            delete_count = section_end - title_row + 1
+            unmerge_ranges_overlapping_rows(ws, title_row, section_end)
+            ws.delete_rows(title_row, amount=delete_count)
+            shift_runtime_layout(title_row, -delete_count, skip_phase=phase)
+            SECTION_ROW_RANGES.pop(phase, None)
+            PHASE_METADATA_POSITIONS.pop(phase, None)
+            DYNAMIC_FORMULA_PHASES.remove(phase)
+            continue
         target_count = desired_section_row_count(rows)
         row_delta = target_count - len(base_row_indices)
 
@@ -1083,19 +1135,13 @@ def prepare_dynamic_formula_sections(
             continue
 
         visible_rows = base_row_indices[:target_count]
-        total_row = visible_rows[-1] + 1
-        hidden_rows = [
-            row
-            for row in base_row_indices[target_count:]
-            if row != total_row
-        ]
-        old_total_row = base_row_indices[-1] + 1
-        if old_total_row != total_row:
-            hidden_rows.append(old_total_row)
         SECTION_ROW_RANGES[phase] = visible_rows
-        for row in hidden_rows:
-            clear_cells(ws, [row], range(1, 18))
-            ws.row_dimensions[row].hidden = True
+        if row_delta < 0:
+            delete_count = -row_delta
+            delete_at = visible_rows[-1] + 2
+            unmerge_ranges_overlapping_rows(ws, delete_at, delete_at + delete_count - 1)
+            ws.delete_rows(delete_at, amount=delete_count)
+            shift_runtime_layout(delete_at, -delete_count, skip_phase=phase)
 
     unmerge_blocking_material_ranges(ws)
     enforce_material_name_merges(ws)
@@ -1533,6 +1579,34 @@ def apply_total_row_style(ws: openpyxl.worksheet.worksheet.Worksheet) -> None:
                 bottom=total_bottom,
             )
 
+
+def apply_material_table_borders(ws: openpyxl.worksheet.worksheet.Worksheet) -> None:
+    row_border = Border(
+        left=Side(style="thin", color="000000"),
+        right=Side(style="thin", color="000000"),
+        top=Side(style="thin", color="000000"),
+        bottom=Side(style="thin", color="000000"),
+    )
+    for row_indices in SECTION_ROW_RANGES.values():
+        for row in row_indices:
+            ws.row_dimensions[row].hidden = False
+            for column in range(1, 18):
+                ws.cell(row=row, column=column).border = row_border
+
+def apply_formula_section_separators(ws: openpyxl.worksheet.worksheet.Worksheet) -> None:
+    empty_border = Border()
+    white_fill = PatternFill(fill_type=None)
+    for row_indices in SECTION_ROW_RANGES.values():
+        separator_row = row_indices[-1] + 1 + FORMULA_SECTION_SEPARATOR_ROWS
+        unmerge_ranges_overlapping_rows(ws, separator_row, separator_row)
+        clear_cells(ws, [separator_row], range(1, 18))
+        ws.row_dimensions[separator_row].hidden = False
+        ws.row_dimensions[separator_row].height = FORMULA_ROW_HEIGHT_POINTS
+        for column in range(1, 18):
+            cell = ws.cell(row=separator_row, column=column)
+            cell.border = empty_border
+            cell.fill = white_fill
+            cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
 
 def apply_formula_number_formats(ws: openpyxl.worksheet.worksheet.Worksheet) -> None:
     currency_format = USD_ACCOUNTING_FORMAT
@@ -2029,7 +2103,7 @@ def clone_template_sheet_layout(
             target_cell = target_ws.cell(
                 row=source_cell.row,
                 column=source_cell.column,
-                value=source_cell.value,
+                value=normalize_formula_text(source_cell.value),
             )
             copy_cell_format(source_cell, target_cell)
             if source_cell.comment:
@@ -2144,7 +2218,13 @@ def write_formula_sheet(ws: openpyxl.worksheet.worksheet.Worksheet, formulation:
 
     for field_name, position in FORMULA_METADATA_POSITIONS.items():
         value = getattr(formulation, field_name)
+        if field_name in FORMULA_NUMERIC_METADATA_FIELDS:
+            value = coerce_numeric_metadata_value(value)
         set_cell_value(ws, position[0], position[1], value)
+        if field_name in FORMULA_NUMERIC_METADATA_FIELDS:
+            cell = writable_cell(ws, position[0], position[1])
+            if cell is not None:
+                cell.number_format = FORMULA_NUMERIC_METADATA_FORMAT
 
     apply_document_header_layout(ws, formulation)
 
@@ -2259,7 +2339,9 @@ def write_formula_sheet(ws: openpyxl.worksheet.worksheet.Worksheet, formulation:
     apply_formula_number_formats(ws)
     merge_process_instruction_columns(ws, phase_rows)
     enforce_material_name_merges(ws)
+    apply_material_table_borders(ws)
     apply_total_row_style(ws)
+    apply_formula_section_separators(ws)
     update_top_formula_summary(ws)
     apply_approval_block(ws, formulation)
     apply_formula_row_height(ws)

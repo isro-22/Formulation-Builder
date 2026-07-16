@@ -31,6 +31,10 @@ The final output is a stable Excel workbook, along with JSON/XLSX model exports 
 - Scraped output export to `outputs/scraped` as JSON and XLSX
 - Header, phase, and material validation before generation
 - Support for `mg/stick` and `%` input modes
+- Dynamic material tables with preserved borders when phase rows expand
+- Premix sections render only when material rows exist for that premix phase
+- One visible blank separator row between rendered phase tables
+- Online material lookup formulas use Excel-compatible `IFNA(XLOOKUP(...))` syntax
 - Unit tests for the generator engine
 
 ## Project Structure
@@ -166,7 +170,30 @@ The generated workbook writes SharePoint `XLOOKUP` formulas directly into the ma
 - `CAS Number` looks up the online CAS value.
 - `Material Price (USD / KG)` looks up the online price value.
 
-The formulas use semicolon (`;`) argument separators and automatically reference the generated material row, for example `B148`, `B149`, and so on.
+The formulas are written as `=IFNA(XLOOKUP(...), fallback)` without the implicit-intersection `@` operator. This avoids Excel parsing issues such as `=@IFNA(...)` in generated material lookup formulas.
+
+### Layout Rules
+
+Generated formulation sheets apply these layout rules:
+
+- material table borders are applied across all active material rows for every phase,
+- empty premix sections are removed instead of displayed as blank tables,
+- rendered phase tables are separated by one visible blank row,
+- sensory metadata cells `J13:J16` are formatted as numeric cells when numeric values are provided.
+
+These rules apply to the main phases and supported premix phases:
+
+- `Casing Rajangan`
+- `Casing Krosok`
+- `Top Flavor`
+- `Casing Pre-Mix`
+- `Casing Pre-Mix 2`
+- `Casing Pre-Mix 3`
+- `Flavor Pre-Mix 1`
+- `Flavor Pre-Mix 2`
+- `Flavor Pre-Mix 3`
+- `Flavor Pre-Mix 4`
+- `Flavor Pre-Mix 5`
 
 ## Database Model
 
@@ -201,6 +228,7 @@ python -m unittest tests/test_formulation_generator.py
 - `template_scraper.py` is safe to import from `app.py`.
 - `formulation_generator.py` remains the source of truth for workbook generation logic.
 - Workbook output depends heavily on the Excel template layout, so template changes should be tested carefully.
+- Change history and bug/action notes are tracked in `log.md`.
 
 ## Next Development
 
